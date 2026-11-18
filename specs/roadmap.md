@@ -11,11 +11,11 @@
 - [x] Scatter plot with X/Y feature pickers
 - [x] Scatter matrix (all feature pairs)
 
-## Phase 3 — Interactivity
-- [ ] Species toggle filters update every chart
-- [ ] Linked selection between charts
-- [ ] Sortable data table of filtered rows
-- [ ] Export filtered rows to CSV
+## Phase 3 — Interactivity ✅
+- [x] Species toggle filters update every chart
+- [x] Linked selection between charts
+- [x] Sortable data table of filtered rows
+- [x] Export filtered rows to CSV
 
 ## Phase 4 — ML extras (optional)
 - [ ] Correlation heatmap
