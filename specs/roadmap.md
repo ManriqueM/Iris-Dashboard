@@ -5,11 +5,11 @@
 - [x] Page layout: header, filter bar, chart grid
 - [x] KPI tiles: sample count, species count, feature means
 
-## Phase 2 — Core charts
-- [ ] Histograms per feature, colored by species
-- [ ] Box plots per feature by species
-- [ ] Scatter plot with X/Y feature pickers
-- [ ] Scatter matrix (all feature pairs)
+## Phase 2 — Core charts ✅
+- [x] Histograms per feature, colored by species
+- [x] Box plots per feature by species
+- [x] Scatter plot with X/Y feature pickers
+- [x] Scatter matrix (all feature pairs)
 
 ## Phase 3 — Interactivity
 - [ ] Species toggle filters update every chart
