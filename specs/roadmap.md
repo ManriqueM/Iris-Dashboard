@@ -1,9 +1,9 @@
 # Roadmap
 
-## Phase 1 — Data & skeleton
-- [ ] Add `data/iris.csv` and embed it in `index.html`
-- [ ] Page layout: header, filter bar, chart grid
-- [ ] KPI tiles: sample count, species count, feature means
+## Phase 1 — Data & skeleton ✅
+- [x] Add `data/iris.csv` and embed it in `index.html`
+- [x] Page layout: header, filter bar, chart grid
+- [x] KPI tiles: sample count, species count, feature means
 
 ## Phase 2 — Core charts
 - [ ] Histograms per feature, colored by species
