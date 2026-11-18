@@ -17,10 +17,10 @@
 - [x] Sortable data table of filtered rows
 - [x] Export filtered rows to CSV
 
-## Phase 4 — ML extras (optional)
-- [ ] Correlation heatmap
-- [ ] PCA 2-D projection
-- [ ] k-NN "predict a flower" tool with sliders
+## Phase 4 — ML extras (optional) ✅
+- [x] Correlation heatmap
+- [x] PCA 2-D projection
+- [x] k-NN "predict a flower" tool with sliders
 
 ## Phase 5 — Polish
 - [ ] Responsive layout and light/dark check
