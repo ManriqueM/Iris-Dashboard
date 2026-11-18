@@ -43,10 +43,18 @@
 
   .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--gap); }
   @media (max-width: 720px) { .grid { grid-template-columns: 1fr; } }
-  .placeholder { min-height: 220px; display: flex; flex-direction: column; justify-content: space-between; }
-  .placeholder h3 { margin: 0; font-size: 1rem; }
-  .placeholder .box { flex: 1; margin-top: 12px; border: 1px dashed var(--border); border-radius: 8px;
-                      display: grid; place-items: center; color: var(--muted); font-size: 0.85rem; }
+  .chart-card { min-width: 0; }
+  .chart-card.wide { grid-column: 1 / -1; }
+  .chart-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .chart-head h3 { margin: 0; font-size: 1rem; }
+  .pickers { display: flex; gap: 12px; flex-wrap: wrap; }
+  .chart-head label { font-size: 0.85rem; color: var(--muted); display: inline-flex; align-items: center; gap: 6px; }
+  select { font: inherit; font-size: 0.85rem; color: var(--text); background: var(--surface);
+           border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; }
+  .hint { margin: 6px 0 4px; font-size: 0.85rem; color: var(--muted); }
+  .chart { width: 100%; height: 320px; }
+  .chart.tall { height: 640px; }
+  @media (max-width: 720px) { .chart.tall { height: 480px; } }
   footer { margin-top: 32px; font-size: 0.8rem; color: var(--muted); }
 </style>
 </head>
@@ -71,15 +79,38 @@
 
   <h2>Charts</h2>
   <section class="grid" id="chart-grid">
-    <div class="card placeholder"><h3>Feature distributions</h3><div class="box">Histograms, coming in Phase 2</div></div>
-    <div class="card placeholder"><h3>Spread by species</h3><div class="box">Box plots, coming in Phase 2</div></div>
-    <div class="card placeholder"><h3>Feature vs. feature</h3><div class="box">Scatter plot, coming in Phase 2</div></div>
-    <div class="card placeholder"><h3>All pairs at once</h3><div class="box">Scatter matrix, coming in Phase 2</div></div>
+    <div class="card chart-card">
+      <div class="chart-head"><h3>Feature distributions</h3>
+        <label>Feature <select id="hist-feature"></select></label></div>
+      <p class="hint">Where do each species' values fall? Petal measurements barely overlap; sepal ones do.</p>
+      <div class="chart" id="chart-hist"></div>
+    </div>
+    <div class="card chart-card">
+      <div class="chart-head"><h3>Spread by species</h3>
+        <label>Feature <select id="box-feature"></select></label></div>
+      <p class="hint">Box = middle 50% of flowers, line = median, dots = individual flowers.</p>
+      <div class="chart" id="chart-box"></div>
+    </div>
+    <div class="card chart-card wide">
+      <div class="chart-head"><h3>Feature vs. feature</h3>
+        <div class="pickers">
+          <label>X <select id="scatter-x"></select></label>
+          <label>Y <select id="scatter-y"></select></label>
+        </div></div>
+      <p class="hint">Each dot is one flower. Hover to see all four measurements.</p>
+      <div class="chart" id="chart-scatter"></div>
+    </div>
+    <div class="card chart-card wide">
+      <div class="chart-head"><h3>All pairs at once</h3></div>
+      <p class="hint">Every combination of two features. Look for the panels where the colors separate cleanly.</p>
+      <div class="chart tall" id="chart-splom"></div>
+    </div>
   </section>
 
   <footer>Data: Fisher's Iris dataset (1936), 150 samples. Works offline.</footer>
 </div>
 
+<script>/*PLOTLY_JS*/</script>
 <script>
 const IRIS = /*IRIS_DATA*/;
 
@@ -129,6 +160,128 @@ function render(stats) {
 const STATS = computeStats(IRIS);
 window.IRIS_STATS = STATS; // exposed for validation
 render(STATS);
+
+/* ---------- Charts (Phase 2) ---------- */
+const css = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+const theme = () => ({
+  text: css("--text"), muted: css("--muted"), border: css("--border"),
+  colors: Object.fromEntries(SPECIES.map(s => [s, css(`--${s}`)])),
+});
+const labelOf = key => FEATURES.find(f => f.key === key).label;
+const bySpecies = s => IRIS.filter(r => r.species === s);
+const CONFIG = {
+  responsive: true, displaylogo: false,
+  modeBarButtonsToRemove: ["select2d", "lasso2d", "autoScale2d", "toggleSpikelines",
+                           "hoverClosestCartesian", "hoverCompareCartesian", "zoomIn2d", "zoomOut2d"],
+};
+
+function baseLayout(t, extra = {}) {
+  const axis = { gridcolor: t.border, zerolinecolor: t.border, linecolor: t.border, tickfont: { color: t.muted } };
+  return {
+    paper_bgcolor: "rgba(0,0,0,0)", plot_bgcolor: "rgba(0,0,0,0)",
+    font: { family: "system-ui, -apple-system, Segoe UI, Roboto, sans-serif", size: 12, color: t.text },
+    margin: { l: 48, r: 12, t: 12, b: 44 },
+    legend: { orientation: "h", y: -0.22, x: 0 },
+    hoverlabel: { font: { family: "system-ui, sans-serif" } },
+    xaxis: { ...axis }, yaxis: { ...axis },
+    ...extra,
+  };
+}
+
+function fillSelect(id, selected) {
+  const el = document.getElementById(id);
+  el.innerHTML = FEATURES.map(f => `<option value="${f.key}"${f.key === selected ? " selected" : ""}>${f.label}</option>`).join("");
+  return el;
+}
+
+function drawHist(key) {
+  const t = theme();
+  const traces = SPECIES.map(s => ({
+    type: "histogram", name: s, x: bySpecies(s).map(r => r[key]),
+    marker: { color: t.colors[s], line: { color: t.colors[s], width: 1 } }, opacity: 0.6,
+    xbins: { size: 0.2 },
+    hovertemplate: `${s}<br>%{x} cm: %{y} flowers<extra></extra>`,
+  }));
+  const layout = baseLayout(t, { barmode: "overlay", legend: { orientation: "h", y: 1.1, x: 0 } });
+  layout.margin.t = 28;
+  layout.xaxis.title = { text: `${labelOf(key)} (cm)`, font: { color: t.muted } };
+  layout.yaxis.title = { text: "Flowers", font: { color: t.muted } };
+  Plotly.react("chart-hist", traces, layout, CONFIG);
+}
+
+function drawBox(key) {
+  const t = theme();
+  const traces = SPECIES.map(s => ({
+    type: "box", name: s, y: bySpecies(s).map(r => r[key]),
+    marker: { color: t.colors[s], size: 4 }, line: { width: 1.5 },
+    boxpoints: "all", jitter: 0.4, pointpos: 0, fillcolor: "rgba(0,0,0,0)",
+    hovertemplate: `${s}<br>%{y} cm<extra></extra>`,
+  }));
+  const layout = baseLayout(t, { showlegend: false });
+  layout.yaxis.title = { text: `${labelOf(key)} (cm)`, font: { color: t.muted } };
+  Plotly.react("chart-box", traces, layout, CONFIG);
+}
+
+function drawScatter(xKey, yKey) {
+  const t = theme();
+  const traces = SPECIES.map(s => {
+    const rows = bySpecies(s);
+    return {
+      type: "scatter", mode: "markers", name: s,
+      x: rows.map(r => r[xKey]), y: rows.map(r => r[yKey]),
+      customdata: rows.map(r => FEATURES.map(f => r[f.key])),
+      marker: { color: t.colors[s], size: 8, opacity: 0.8, line: { color: css("--surface"), width: 0.5 } },
+      hovertemplate: `<b>${s}</b><br>` +
+        FEATURES.map((f, i) => `${f.label}: %{customdata[${i}]} cm`).join("<br>") + "<extra></extra>",
+    };
+  });
+  const layout = baseLayout(t, { legend: { orientation: "h", y: 1.08, x: 0 } });
+  layout.margin.t = 28;
+  layout.xaxis.title = { text: `${labelOf(xKey)} (cm)`, font: { color: t.muted } };
+  layout.yaxis.title = { text: `${labelOf(yKey)} (cm)`, font: { color: t.muted } };
+  Plotly.react("chart-scatter", traces, layout, CONFIG);
+}
+
+function drawSplom() {
+  const t = theme();
+  const narrow = window.innerWidth < 720;
+  const short = { sepal_length: "Sepal L", sepal_width: "Sepal W", petal_length: "Petal L", petal_width: "Petal W" };
+  const traces = SPECIES.map(s => {
+    const rows = bySpecies(s);
+    return {
+      type: "splom", name: s, showupperhalf: false, diagonal: { visible: false },
+      dimensions: FEATURES.map(f => ({ label: narrow ? short[f.key] : f.label, values: rows.map(r => r[f.key]) })),
+      marker: { color: t.colors[s], size: narrow ? 4 : 6, opacity: 0.75, line: { color: css("--surface"), width: 0.4 } },
+      hovertemplate: `${s}<br>(%{x} cm, %{y} cm)<extra></extra>`,
+    };
+  });
+  const layout = baseLayout(t, { legend: { orientation: "h", y: 1.04, x: 0 }, dragmode: false, hovermode: "closest" });
+  layout.margin = { l: narrow ? 52 : 70, r: 12, t: narrow ? 56 : 30, b: narrow ? 48 : 60 };
+  if (narrow) layout.legend.y = 1.12;
+  const axis = { gridcolor: t.border, zerolinecolor: t.border, linecolor: t.border, tickfont: { color: t.muted, size: 10 },
+                 title: { font: { color: t.muted } } };
+  for (let i = 1; i <= 4; i++) { layout[`xaxis${i === 1 ? "" : i}`] = { ...axis }; layout[`yaxis${i === 1 ? "" : i}`] = { ...axis }; }
+  Plotly.react("chart-splom", traces, layout, CONFIG);
+}
+
+const histSel = fillSelect("hist-feature", "petal_length");
+const boxSel = fillSelect("box-feature", "petal_length");
+const xSel = fillSelect("scatter-x", "petal_length");
+const ySel = fillSelect("scatter-y", "petal_width");
+const drawAll = () => {
+  drawHist(histSel.value); drawBox(boxSel.value); drawScatter(xSel.value, ySel.value); drawSplom();
+};
+histSel.addEventListener("change", () => drawHist(histSel.value));
+boxSel.addEventListener("change", () => drawBox(boxSel.value));
+xSel.addEventListener("change", () => drawScatter(xSel.value, ySel.value));
+ySel.addEventListener("change", () => drawScatter(xSel.value, ySel.value));
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change", drawAll);
+let narrowNow = window.innerWidth < 720;
+window.addEventListener("resize", () => {
+  const n = window.innerWidth < 720;
+  if (n !== narrowNow) { narrowNow = n; drawSplom(); }
+});
+drawAll();
 </script>
 </body>
 </html>

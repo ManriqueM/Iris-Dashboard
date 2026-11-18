@@ -60,13 +60,47 @@ with sync_playwright() as p:
     check("KPI tiles show 150 and 3", tiles[:2] == ["150", "3"], str(tiles[:2]))
     check("4 feature-mean tiles", len(tiles) == 6, str(len(tiles)))
     check("Species table has 3 rows", page.locator("#species-table tbody tr").count() == 3)
-    check("4 chart placeholders", page.locator("#chart-grid .placeholder").count() == 4)
-    page.screenshot(path=str(shots / "phase1-desktop.png"), full_page=True)
+    check("4 chart cards", page.locator("#chart-grid .chart-card").count() == 4)
+
+    # --- Phase 2: charts ---
+    check("Plotly loaded (inlined)", page.evaluate("typeof Plotly === 'object'"))
+    traces = page.evaluate("""() => Object.fromEntries(['chart-hist','chart-box','chart-scatter','chart-splom'].map(id => {
+        const d = document.getElementById(id).data || [];
+        return [id, d.map(t => ({ name: t.name, n: (t.x || t.y || (t.dimensions && t.dimensions[0].values) || []).length,
+                                  dims: t.dimensions ? t.dimensions.length : 0 }))];
+    }))""")
+    for cid in ["chart-hist", "chart-box", "chart-scatter"]:
+        tr = traces[cid]
+        check(f"{cid}: 3 species traces x 50 points",
+              [t["name"] for t in tr] == ["setosa", "versicolor", "virginica"] and all(t["n"] == 50 for t in tr),
+              str(tr))
+    sp = traces["chart-splom"]
+    check("chart-splom: 3 traces x 4 dimensions", len(sp) == 3 and all(t["dims"] == 4 and t["n"] == 50 for t in sp), str(sp))
+
+    sepal_w = [r["sepal_width"] for r in rows if r["species"] == "setosa"]
+    page.select_option("#scatter-x", "sepal_width")
+    page.wait_for_timeout(300)
+    x0 = page.evaluate("Array.from(document.getElementById('chart-scatter').data[0].x)")
+    check("Scatter X picker updates data", x0 == sepal_w)
+    page.select_option("#scatter-x", "petal_length")
+
+    petal_w = [r["petal_width"] for r in rows if r["species"] == "setosa"]
+    page.select_option("#hist-feature", "petal_width")
+    page.wait_for_timeout(300)
+    h0 = page.evaluate("Array.from(document.getElementById('chart-hist').data[0].x)")
+    check("Histogram picker updates data", h0 == petal_w)
+    page.select_option("#hist-feature", "petal_length")
+    page.wait_for_timeout(300)
+    check("No console errors after interaction", not errors, "; ".join(errors))
+    check("Still no network requests", not external, ", ".join(external))
+
+    page.screenshot(path=str(shots / "phase2-desktop.png"), full_page=True)
 
     page.set_viewport_size({"width": 375, "height": 800})
+    page.wait_for_timeout(600)
     overflow = page.evaluate("document.documentElement.scrollWidth > window.innerWidth")
     check("No horizontal overflow at 375px", not overflow)
-    page.screenshot(path=str(shots / "phase1-mobile.png"), full_page=True)
+    page.screenshot(path=str(shots / "phase2-mobile.png"), full_page=True)
     browser.close()
 
 print(f"\n{sum(results)}/{len(results)} checks passed")
