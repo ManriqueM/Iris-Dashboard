@@ -28,7 +28,7 @@ check("CSV has 150 rows", len(rows) == 150, str(len(rows)))
 check("50 rows per species", set(counts.values()) == {50} and len(counts) == 3, dict(counts).__repr__())
 
 html = (ROOT / "index.html").read_text()
-m = re.search(r"const IRIS = (\[.*?\]);", html, re.S)
+m = re.search(r"const IRIS = (\[.*?\])\.map\(", html, re.S)
 check("IRIS constant matches CSV", bool(m) and json.loads(m.group(1)) == rows)
 
 overall = {k: round(mean(rows, k), 3) for k in NUMERIC}
@@ -94,13 +94,102 @@ with sync_playwright() as p:
     check("No console errors after interaction", not errors, "; ".join(errors))
     check("Still no network requests", not external, ", ".join(external))
 
-    page.screenshot(path=str(shots / "phase2-desktop.png"), full_page=True)
+    # --- Phase 3: interactivity ---
+    kpi_samples = lambda: page.locator(".kpi .value").first.inner_text()
+    table_rows = lambda: page.locator("#data-table tbody tr").count()
+    trace_names = lambda cid: page.evaluate(f"document.getElementById('{cid}').data.map(t => t.name)")
+
+    check("Data table starts with 150 rows", table_rows() == 150, str(table_rows()))
+    page.click('.chip[data-species="setosa"]')
+    page.wait_for_timeout(300)
+    check("Setosa off: table shows 100 rows", table_rows() == 100, str(table_rows()))
+    check("Setosa off: Samples KPI = 100", kpi_samples() == "100", kpi_samples())
+    check("Setosa off: removed from every chart",
+          all("setosa" not in trace_names(c) for c in ["chart-hist", "chart-box", "chart-scatter", "chart-splom"]))
+    check("Setosa chip shows as off", page.get_attribute('.chip[data-species="setosa"]', "aria-pressed") == "false")
+    check("Species table greys setosa", "off" in (page.get_attribute('#species-table tr[data-species="setosa"]', "class") or ""))
+
+    page.click('.chip[data-species="versicolor"]')
+    page.wait_for_timeout(200)
+    page.click('.chip[data-species="virginica"]', force=True)  # last one: must be ignored
+    page.wait_for_timeout(200)
+    check("Last active species can't be turned off",
+          page.get_attribute('.chip[data-species="virginica"]', "aria-pressed") == "true" and table_rows() == 50)
+    page.click('.chip[data-species="setosa"]'); page.click('.chip[data-species="versicolor"]')
+    page.wait_for_timeout(300)
+    check("All species restored", table_rows() == 150)
+
+    # Simulated selection of 10 flowers (ids from two species) via Plotly's event
+    page.evaluate("""() => {
+        const gd = document.getElementById('chart-scatter');
+        const pts = [];
+        gd.data.forEach((t, c) => t.customdata.slice(0, 5).forEach((cd, i) => { if (c < 2) pts.push({ curveNumber: c, pointIndex: i, customdata: cd }); }));
+        gd.emit('plotly_selected', { points: pts });
+    }""")
+    page.wait_for_timeout(400)
+    banner = page.locator("#banner-text").inner_text()
+    check("Selection banner: '10 flowers selected'", banner == "10 flowers selected" and page.is_visible("#banner"), banner)
+    check("Selection: table shows 10 rows", table_rows() == 10, str(table_rows()))
+    check("Selection: Samples KPI = 10", kpi_samples() == "10", kpi_samples())
+    sel = page.evaluate("document.getElementById('chart-splom').data.map(t => (t.selectedpoints || []).length)")
+    check("Selection: scatter matrix highlights 5+5+0", sel == [5, 5, 0], str(sel))
+    hist_n = page.evaluate("document.getElementById('chart-hist').data.reduce((a, t) => a + t.x.length, 0)")
+    check("Selection: histograms use only selected flowers", hist_n == 10, str(hist_n))
+    check("No console errors during selection", not errors, "; ".join(errors))
+    page.screenshot(path=str(shots / "phase3-selection-desktop.png"), full_page=True)
+
+    page.click("#clear-sel")
+    page.wait_for_timeout(300)
+    check("Clear restores full table", table_rows() == 150 and not page.is_visible("#banner"))
+
+    # Real mouse drag over the setosa cluster (petal length 0.9–2.1, petal width 0–0.7)
+    page.locator("#chart-scatter").scroll_into_view_if_needed()
+    box = page.evaluate("""() => {
+        const gd = document.getElementById('chart-scatter'), fl = gd._fullLayout, r = gd.getBoundingClientRect();
+        const px = v => r.left + fl.margin.l + fl.xaxis.l2p(v), py = v => r.top + fl.margin.t + fl.yaxis.l2p(v);
+        return [px(0.9), py(0.75), px(2.1), py(0.0)];
+    }""")
+    page.mouse.move(box[0], box[1]); page.mouse.down()
+    page.mouse.move((box[0] + box[2]) / 2, (box[1] + box[3]) / 2, steps=5)
+    page.mouse.move(box[2], box[3], steps=5); page.mouse.up()
+    page.wait_for_timeout(500)
+    check("Real drag-select over setosa selects 50", table_rows() == 50 and
+          page.locator("#banner-text").inner_text() == "50 flowers selected", page.locator("#banner-text").inner_text())
+    page.mouse.dblclick(box[2] + 200, box[1] - 60); page.wait_for_timeout(500)
+    check("Double-click on scatter clears selection", table_rows() == 150 and not page.is_visible("#banner"))
+
+    # Sort + export
+    page.click('#data-table th button[data-key="petal_length"]')  # first click on a measure = descending
+    page.wait_for_timeout(200)
+    first = page.locator("#data-table tbody tr").first.locator("td").nth(4).inner_text()
+    check("Sort petal length desc: first row 6.9", first == "6.9", first)
+    with page.expect_download() as dl:
+        page.click("#export-csv")
+    csv_text = Path(dl.value.path()).read_text().strip().splitlines()
+    table_ids = page.evaluate("Array.from(document.querySelectorAll('#data-table tbody tr td:first-child')).map(td => td.textContent)")
+    check("Export: header + 150 rows, same order as table",
+          csv_text[0].startswith("id,species") and len(csv_text) == 151 and [l.split(",")[0] for l in csv_text[1:]] == table_ids,
+          f"{len(csv_text)} lines, file {dl.value.suggested_filename}")
+    page.click('.chip[data-species="virginica"]'); page.wait_for_timeout(300)
+    with page.expect_download() as dl2:
+        page.click("#export-csv")
+    n2 = len(Path(dl2.value.path()).read_text().strip().splitlines()) - 1
+    check("Export respects filters (100 rows)", n2 == 100, str(n2))
+    page.click('.chip[data-species="virginica"]'); page.wait_for_timeout(300)
+
+    check("No console errors overall", not errors, "; ".join(errors))
+    check("No network requests overall", not external, ", ".join(external))
+    page.screenshot(path=str(shots / "phase3-desktop.png"), full_page=True)
 
     page.set_viewport_size({"width": 375, "height": 800})
     page.wait_for_timeout(600)
+    page.click('.chip[data-species="setosa"]'); page.wait_for_timeout(300)
     overflow = page.evaluate("document.documentElement.scrollWidth > window.innerWidth")
     check("No horizontal overflow at 375px", not overflow)
-    page.screenshot(path=str(shots / "phase2-mobile.png"), full_page=True)
+    page.evaluate("window.scrollTo(0, 0)"); page.wait_for_timeout(300)
+    check("Filter chips visible at 375px", page.is_visible('.chip[data-species="virginica"]'))
+    page.screenshot(path=str(shots / "phase3-mobile.png"), full_page=True)
+    page.screenshot(path=str(shots / "phase3-mobile-top.png"))
     browser.close()
 
 print(f"\n{sum(results)}/{len(results)} checks passed")

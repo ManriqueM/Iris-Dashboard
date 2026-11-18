@@ -7,13 +7,13 @@
 <style>
   :root {
     --bg: #f7f7f5; --surface: #ffffff; --text: #1d1d1f; --muted: #6b6b70;
-    --border: #e3e3e0; --radius: 10px; --gap: 16px;
+    --border: #e3e3e0; --accent-bg: #eef3fb; --radius: 10px; --gap: 16px;
     --setosa: #2a78d6; --versicolor: #e0821e; --virginica: #4aa564;
     font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   }
   @media (prefers-color-scheme: dark) {
     :root { --bg: #151517; --surface: #1f1f22; --text: #ececee; --muted: #9a9aa2; --border: #33333a;
-            --setosa: #5a9cf0; --versicolor: #f0a050; --virginica: #6cc485; }
+            --accent-bg: #22293a; --setosa: #5a9cf0; --versicolor: #f0a050; --virginica: #6cc485; }
   }
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--bg); color: var(--text); line-height: 1.45; }
@@ -22,12 +22,26 @@
   header p { margin: 0; color: var(--muted); max-width: 70ch; }
   .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: var(--gap); }
   h2 { font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); margin: 28px 0 10px; font-weight: 600; }
+  button { font: inherit; cursor: pointer; }
 
-  .filters { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-top: 20px; }
+  /* Toolbar: filters + selection banner (sticky so it's reachable while scrolling) */
+  .toolbar { position: sticky; top: 0; z-index: 5; background: var(--bg); padding: 12px 0; margin-top: 8px;
+             display: flex; gap: 10px 16px; flex-wrap: wrap; align-items: center; justify-content: space-between;
+             border-bottom: 1px solid transparent; }
+  .toolbar.stuck { border-bottom-color: var(--border); }
+  .filters { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .filters .lbl { font-size: 0.85rem; color: var(--muted); margin-right: 2px; }
   .chip { display: inline-flex; align-items: center; gap: 6px; padding: 5px 12px; border: 1px solid var(--border);
-          border-radius: 999px; background: var(--surface); font-size: 0.9rem; color: var(--muted); }
-  .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
-  .soon { font-size: 0.8rem; color: var(--muted); font-style: italic; }
+          border-radius: 999px; background: var(--surface); font-size: 0.9rem; color: var(--text); transition: opacity .15s; }
+  .chip[aria-pressed="false"] { opacity: 0.45; text-decoration: line-through; background: transparent; }
+  .chip[aria-pressed="false"] .dot { background: transparent !important; box-shadow: inset 0 0 0 1.5px var(--muted); }
+  .chip[aria-disabled="true"] { cursor: not-allowed; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; flex: none; }
+  .banner { display: none; align-items: center; gap: 10px; padding: 5px 6px 5px 12px; border-radius: 999px;
+            background: var(--accent-bg); font-size: 0.9rem; }
+  .banner.show { display: inline-flex; }
+  .banner button { border: 1px solid var(--border); background: var(--surface); color: var(--text);
+                   border-radius: 999px; padding: 2px 10px; font-size: 0.85rem; }
 
   .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: var(--gap); }
   .kpi .label { font-size: 0.85rem; color: var(--muted); }
@@ -40,6 +54,7 @@
   th:first-child, td:first-child { text-align: left; }
   thead th { font-size: 0.8rem; color: var(--muted); font-weight: 600; }
   tbody tr:last-child td { border-bottom: none; }
+  tr.off td { opacity: 0.4; }
 
   .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--gap); }
   @media (max-width: 720px) { .grid { grid-template-columns: 1fr; } }
@@ -47,7 +62,7 @@
   .chart-card.wide { grid-column: 1 / -1; }
   .chart-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
   .chart-head h3 { margin: 0; font-size: 1rem; }
-  .pickers { display: flex; gap: 12px; flex-wrap: wrap; }
+  .pickers { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
   .chart-head label { font-size: 0.85rem; color: var(--muted); display: inline-flex; align-items: center; gap: 6px; }
   select { font: inherit; font-size: 0.85rem; color: var(--text); background: var(--surface);
            border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; }
@@ -55,6 +70,25 @@
   .chart { width: 100%; height: 320px; }
   .chart.tall { height: 640px; }
   @media (max-width: 720px) { .chart.tall { height: 480px; } }
+
+  /* Data table */
+  .data-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 8px; }
+  .data-head .count { font-size: 0.9rem; color: var(--muted); }
+  .btn { border: 1px solid var(--border); background: var(--surface); color: var(--text); border-radius: 6px;
+         padding: 5px 12px; font-size: 0.85rem; }
+  .btn:hover { background: var(--accent-bg); }
+  .data-scroll { max-height: 420px; overflow: auto; border-top: 1px solid var(--border); }
+  #data-table thead th { position: sticky; top: 0; background: var(--surface); z-index: 1; padding: 0;
+                         box-shadow: inset 0 -1px 0 var(--border); }
+  #data-table thead th button { all: unset; box-sizing: border-box; display: block; width: 100%; padding: 9px 12px;
+                                cursor: pointer; text-align: inherit; }
+  #data-table thead th button:focus-visible { outline: 2px solid var(--setosa); outline-offset: -2px; }
+  #data-table thead th[aria-sort="ascending"] button::after { content: " ▲"; font-size: 0.7em; }
+  #data-table thead th[aria-sort="descending"] button::after { content: " ▼"; font-size: 0.7em; }
+  #data-table td, #data-table th { padding-top: 6px; padding-bottom: 6px; }
+  #data-table td:nth-child(2) { text-align: left; }
+  #data-table th:nth-child(2) { text-align: left; }
+
   footer { margin-top: 32px; font-size: 0.8rem; color: var(--muted); }
 </style>
 </head>
@@ -65,11 +99,14 @@
     <p>150 iris flowers from three species, each measured four ways. Explore how the species differ and which measurements tell them apart.</p>
   </header>
 
-  <div class="filters" id="filters" aria-label="Species filters">
-    <!-- chips rendered by JS; interactive in Phase 3 -->
+  <div class="toolbar" id="toolbar">
+    <div class="filters" id="filters" role="group" aria-label="Species filters"></div>
+    <div class="banner" id="banner" role="status" aria-live="polite">
+      <span id="banner-text"></span><button type="button" id="clear-sel">Clear</button>
+    </div>
   </div>
 
-  <h2>Summary</h2>
+  <h2>Summary <span id="kpi-scope" style="text-transform:none;letter-spacing:0;font-weight:400"></span></h2>
   <section class="kpis" id="kpis"></section>
 
   <h2>Average measurements by species (cm)</h2>
@@ -97,7 +134,7 @@
           <label>X <select id="scatter-x"></select></label>
           <label>Y <select id="scatter-y"></select></label>
         </div></div>
-      <p class="hint">Each dot is one flower. Hover to see all four measurements.</p>
+      <p class="hint">Drag a box (or use the lasso in the toolbar) to select flowers. They're highlighted in every chart and the table. Double-click to clear.</p>
       <div class="chart" id="chart-scatter"></div>
     </div>
     <div class="card chart-card wide">
@@ -107,12 +144,23 @@
     </div>
   </section>
 
+  <h2>Data</h2>
+  <section class="card">
+    <div class="data-head">
+      <span class="count" id="data-count"></span>
+      <button type="button" class="btn" id="export-csv">Export CSV</button>
+    </div>
+    <div class="data-scroll table-wrap">
+      <table id="data-table"></table>
+    </div>
+  </section>
+
   <footer>Data: Fisher's Iris dataset (1936), 150 samples. Works offline.</footer>
 </div>
 
 <script>/*PLOTLY_JS*/</script>
 <script>
-const IRIS = /*IRIS_DATA*/;
+const IRIS = /*IRIS_DATA*/.map((r, i) => ({ id: i + 1, ...r }));
 
 const FEATURES = [
   { key: "sepal_length", label: "Sepal length" },
@@ -122,27 +170,75 @@ const FEATURES = [
 ];
 const SPECIES = ["setosa", "versicolor", "virginica"];
 const speciesColor = s => `var(--${s})`;
-
+const labelOf = key => FEATURES.find(f => f.key === key).label;
 const mean = (rows, key) => rows.reduce((a, r) => a + r[key], 0) / rows.length;
 
+/* ---------- State ---------- */
+const state = {
+  species: new Set(SPECIES),   // active species filters
+  selected: null,              // Set of row ids from the scatter brush, or null
+  sort: { key: "id", dir: 1 }, // data table sort
+};
+const filteredRows = () => IRIS.filter(r => state.species.has(r.species));
+const visibleRows = () => filteredRows().filter(r => !state.selected || state.selected.has(r.id));
+const activeSpecies = () => SPECIES.filter(s => state.species.has(s));
+
 function computeStats(rows) {
-  const overall = Object.fromEntries(FEATURES.map(f => [f.key, mean(rows, f.key)]));
+  const overall = Object.fromEntries(FEATURES.map(f => [f.key, rows.length ? mean(rows, f.key) : NaN]));
   const bySpecies = Object.fromEntries(SPECIES.map(s => {
     const sub = rows.filter(r => r.species === s);
-    return [s, { n: sub.length, means: Object.fromEntries(FEATURES.map(f => [f.key, mean(sub, f.key)])) }];
+    return [s, { n: sub.length, means: Object.fromEntries(FEATURES.map(f => [f.key, sub.length ? mean(sub, f.key) : NaN])) }];
   }));
   return { n: rows.length, nSpecies: new Set(rows.map(r => r.species)).size, overall, bySpecies };
 }
+const fmt = v => Number.isNaN(v) ? "—" : v.toFixed(2);
 
-function render(stats) {
-  document.getElementById("filters").innerHTML =
-    SPECIES.map(s => `<span class="chip"><span class="dot" style="background:${speciesColor(s)}"></span>${s}</span>`).join("") +
-    `<span class="soon">Filtering arrives in Phase 3</span>`;
+/* ---------- Filters + banner ---------- */
+function renderFilters() {
+  const onlyOne = state.species.size === 1;
+  document.getElementById("filters").innerHTML = `<span class="lbl">Species</span>` + SPECIES.map(s => {
+    const on = state.species.has(s);
+    const locked = on && onlyOne;
+    return `<button type="button" class="chip" data-species="${s}" aria-pressed="${on}"
+              ${locked ? 'aria-disabled="true" title="At least one species must stay on"' : `title="${on ? "Hide" : "Show"} ${s}"`}>
+              <span class="dot" style="background:${speciesColor(s)}"></span>${s}</button>`;
+  }).join("");
+}
+document.getElementById("filters").addEventListener("click", e => {
+  const chip = e.target.closest(".chip");
+  if (!chip) return;
+  const s = chip.dataset.species;
+  if (state.species.has(s)) {
+    if (state.species.size === 1) return; // keep at least one
+    state.species.delete(s);
+  } else {
+    state.species.add(s);
+  }
+  state.selected = null; // filters and selection never conflict
+  update();
+});
 
+function renderBanner() {
+  const b = document.getElementById("banner");
+  if (state.selected) {
+    const n = visibleRows().length;
+    document.getElementById("banner-text").textContent = `${n} flower${n === 1 ? "" : "s"} selected`;
+    b.classList.add("show");
+  } else {
+    b.classList.remove("show");
+  }
+}
+function clearSelection() { if (state.selected) { state.selected = null; update(); } }
+document.getElementById("clear-sel").addEventListener("click", clearSelection);
+
+/* ---------- KPIs + species table ---------- */
+function renderSummary(stats) {
+  const scope = state.selected ? "· selected flowers" : state.species.size < 3 ? "· filtered species" : "";
+  document.getElementById("kpi-scope").textContent = scope;
   const tiles = [
     { label: "Samples", value: stats.n },
     { label: "Species", value: stats.nSpecies },
-    ...FEATURES.map(f => ({ label: `Avg ${f.label.toLowerCase()}`, value: stats.overall[f.key].toFixed(2), unit: "cm" })),
+    ...FEATURES.map(f => ({ label: `Avg ${f.label.toLowerCase()}`, value: fmt(stats.overall[f.key]), unit: "cm" })),
   ];
   document.getElementById("kpis").innerHTML = tiles.map(t =>
     `<div class="card kpi"><div class="label">${t.label}</div>
@@ -151,29 +247,29 @@ function render(stats) {
   const head = `<thead><tr><th>Species</th><th>n</th>${FEATURES.map(f => `<th>${f.label}</th>`).join("")}</tr></thead>`;
   const body = SPECIES.map(s => {
     const b = stats.bySpecies[s];
-    return `<tr><td><span class="dot" style="background:${speciesColor(s)}"></span> ${s}</td><td>${b.n}</td>` +
-      FEATURES.map(f => `<td>${b.means[f.key].toFixed(2)}</td>`).join("") + `</tr>`;
+    const off = !state.species.has(s);
+    return `<tr class="${off ? "off" : ""}" data-species="${s}"><td><span class="dot" style="background:${speciesColor(s)}"></span> ${s}${off ? " (hidden)" : ""}</td><td>${b.n}</td>` +
+      FEATURES.map(f => `<td>${fmt(b.means[f.key])}</td>`).join("") + `</tr>`;
   }).join("");
   document.getElementById("species-table").innerHTML = head + `<tbody>${body}</tbody>`;
 }
 
-const STATS = computeStats(IRIS);
-window.IRIS_STATS = STATS; // exposed for validation
-render(STATS);
-
-/* ---------- Charts (Phase 2) ---------- */
+/* ---------- Charts ---------- */
 const css = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 const theme = () => ({
-  text: css("--text"), muted: css("--muted"), border: css("--border"),
+  text: css("--text"), muted: css("--muted"), border: css("--border"), surface: css("--surface"),
   colors: Object.fromEntries(SPECIES.map(s => [s, css(`--${s}`)])),
 });
-const labelOf = key => FEATURES.find(f => f.key === key).label;
-const bySpecies = s => IRIS.filter(r => r.species === s);
-const CONFIG = {
-  responsive: true, displaylogo: false,
-  modeBarButtonsToRemove: ["select2d", "lasso2d", "autoScale2d", "toggleSpikelines",
-                           "hoverClosestCartesian", "hoverCompareCartesian", "zoomIn2d", "zoomOut2d"],
-};
+const BASE_REMOVE = ["autoScale2d", "toggleSpikelines", "hoverClosestCartesian", "hoverCompareCartesian", "zoomIn2d", "zoomOut2d"];
+const CONFIG = { responsive: true, displaylogo: false, modeBarButtonsToRemove: [...BASE_REMOVE, "select2d", "lasso2d"] };
+const SCATTER_CONFIG = { responsive: true, displaylogo: false, doubleClick: false, modeBarButtonsToRemove: BASE_REMOVE };
+let redrawing = false; // true while the dashboard itself re-renders the scatter
+const FADED = { marker: { opacity: 0.12 } };
+// Fixed axis ranges per feature so charts don't jump when filtering/selecting
+const RANGE = Object.fromEntries(FEATURES.map(f => {
+  const v = IRIS.map(r => r[f.key]); const lo = Math.min(...v), hi = Math.max(...v), pad = (hi - lo) * 0.05;
+  return [f.key, [lo - pad, hi + pad]];
+}));
 
 function baseLayout(t, extra = {}) {
   const axis = { gridcolor: t.border, zerolinecolor: t.border, linecolor: t.border, tickfont: { color: t.muted } };
@@ -187,6 +283,13 @@ function baseLayout(t, extra = {}) {
     ...extra,
   };
 }
+const axisTitle = (t, text) => ({ text, font: { color: t.muted } });
+
+// For a species' filtered rows, indices of selected points (or null = no selection)
+function selIdx(rows) {
+  if (!state.selected) return null;
+  return rows.map((r, i) => state.selected.has(r.id) ? i : -1).filter(i => i >= 0);
+}
 
 function fillSelect(id, selected) {
   const el = document.getElementById(id);
@@ -196,92 +299,175 @@ function fillSelect(id, selected) {
 
 function drawHist(key) {
   const t = theme();
-  const traces = SPECIES.map(s => ({
-    type: "histogram", name: s, x: bySpecies(s).map(r => r[key]),
+  const rows = visibleRows();
+  const traces = activeSpecies().map(s => ({
+    type: "histogram", name: s, x: rows.filter(r => r.species === s).map(r => r[key]),
     marker: { color: t.colors[s], line: { color: t.colors[s], width: 1 } }, opacity: 0.6,
-    xbins: { size: 0.2 },
+    xbins: { start: 0, end: 8, size: 0.2 },
     hovertemplate: `${s}<br>%{x} cm: %{y} flowers<extra></extra>`,
   }));
   const layout = baseLayout(t, { barmode: "overlay", legend: { orientation: "h", y: 1.1, x: 0 } });
   layout.margin.t = 28;
-  layout.xaxis.title = { text: `${labelOf(key)} (cm)`, font: { color: t.muted } };
-  layout.yaxis.title = { text: "Flowers", font: { color: t.muted } };
+  layout.xaxis.title = axisTitle(t, `${labelOf(key)} (cm)`);
+  layout.xaxis.range = RANGE[key];
+  layout.yaxis.title = axisTitle(t, "Flowers");
   Plotly.react("chart-hist", traces, layout, CONFIG);
 }
 
 function drawBox(key) {
   const t = theme();
-  const traces = SPECIES.map(s => ({
-    type: "box", name: s, y: bySpecies(s).map(r => r[key]),
-    marker: { color: t.colors[s], size: 4 }, line: { width: 1.5 },
-    boxpoints: "all", jitter: 0.4, pointpos: 0, fillcolor: "rgba(0,0,0,0)",
-    hovertemplate: `${s}<br>%{y} cm<extra></extra>`,
-  }));
+  const traces = activeSpecies().map(s => {
+    const rows = IRIS.filter(r => r.species === s);
+    return {
+      type: "box", name: s, y: rows.map(r => r[key]),
+      marker: { color: t.colors[s], size: 4 }, line: { width: 1.5 },
+      boxpoints: "all", jitter: 0.4, pointpos: 0, fillcolor: "rgba(0,0,0,0)",
+      selectedpoints: selIdx(rows), unselected: FADED,
+      hovertemplate: `${s}<br>%{y} cm<extra></extra>`,
+    };
+  });
   const layout = baseLayout(t, { showlegend: false });
-  layout.yaxis.title = { text: `${labelOf(key)} (cm)`, font: { color: t.muted } };
+  layout.yaxis.title = axisTitle(t, `${labelOf(key)} (cm)`);
+  layout.yaxis.range = RANGE[key];
   Plotly.react("chart-box", traces, layout, CONFIG);
 }
 
 function drawScatter(xKey, yKey) {
   const t = theme();
-  const traces = SPECIES.map(s => {
-    const rows = bySpecies(s);
+  const traces = activeSpecies().map(s => {
+    const rows = IRIS.filter(r => r.species === s);
     return {
       type: "scatter", mode: "markers", name: s,
       x: rows.map(r => r[xKey]), y: rows.map(r => r[yKey]),
-      customdata: rows.map(r => FEATURES.map(f => r[f.key])),
-      marker: { color: t.colors[s], size: 8, opacity: 0.8, line: { color: css("--surface"), width: 0.5 } },
-      hovertemplate: `<b>${s}</b><br>` +
-        FEATURES.map((f, i) => `${f.label}: %{customdata[${i}]} cm`).join("<br>") + "<extra></extra>",
+      customdata: rows.map(r => [r.id, ...FEATURES.map(f => r[f.key])]),
+      marker: { color: t.colors[s], size: 8, opacity: 0.85, line: { color: t.surface, width: 0.5 } },
+      selectedpoints: selIdx(rows), selected: { marker: { opacity: 0.95 } }, unselected: FADED,
+      hovertemplate: `<b>${s}</b> · flower #%{customdata[0]}<br>` +
+        FEATURES.map((f, i) => `${f.label}: %{customdata[${i + 1}]} cm`).join("<br>") + "<extra></extra>",
     };
   });
-  const layout = baseLayout(t, { legend: { orientation: "h", y: 1.08, x: 0 } });
+  const layout = baseLayout(t, { legend: { orientation: "h", y: 1.08, x: 0 }, dragmode: "select", hovermode: "closest" });
   layout.margin.t = 28;
-  layout.xaxis.title = { text: `${labelOf(xKey)} (cm)`, font: { color: t.muted } };
-  layout.yaxis.title = { text: `${labelOf(yKey)} (cm)`, font: { color: t.muted } };
-  Plotly.react("chart-scatter", traces, layout, CONFIG);
+  layout.xaxis.title = axisTitle(t, `${labelOf(xKey)} (cm)`);
+  layout.yaxis.title = axisTitle(t, `${labelOf(yKey)} (cm)`);
+  layout.xaxis.range = RANGE[xKey];
+  layout.yaxis.range = RANGE[yKey];
+  if (!state.selected) layout.selections = [];
+  // Plotly re-emits selection events while re-rendering; mute them so they aren't mistaken for user input
+  redrawing = true;
+  return Promise.resolve(Plotly.react("chart-scatter", traces, layout, SCATTER_CONFIG))
+    .finally(() => { setTimeout(() => { redrawing = false; }, 0); });
 }
 
 function drawSplom() {
   const t = theme();
   const narrow = window.innerWidth < 720;
   const short = { sepal_length: "Sepal L", sepal_width: "Sepal W", petal_length: "Petal L", petal_width: "Petal W" };
-  const traces = SPECIES.map(s => {
-    const rows = bySpecies(s);
+  const traces = activeSpecies().map(s => {
+    const rows = IRIS.filter(r => r.species === s);
     return {
       type: "splom", name: s, showupperhalf: false, diagonal: { visible: false },
       dimensions: FEATURES.map(f => ({ label: narrow ? short[f.key] : f.label, values: rows.map(r => r[f.key]) })),
-      marker: { color: t.colors[s], size: narrow ? 4 : 6, opacity: 0.75, line: { color: css("--surface"), width: 0.4 } },
+      marker: { color: t.colors[s], size: narrow ? 4 : 6, opacity: 0.8, line: { color: t.surface, width: 0.4 } },
+      selectedpoints: selIdx(rows), unselected: FADED,
       hovertemplate: `${s}<br>(%{x} cm, %{y} cm)<extra></extra>`,
     };
   });
-  const layout = baseLayout(t, { legend: { orientation: "h", y: 1.04, x: 0 }, dragmode: false, hovermode: "closest" });
+  const layout = baseLayout(t, { legend: { orientation: "h", y: narrow ? 1.12 : 1.04, x: 0 }, dragmode: false, hovermode: "closest" });
   layout.margin = { l: narrow ? 52 : 70, r: 12, t: narrow ? 56 : 30, b: narrow ? 48 : 60 };
-  if (narrow) layout.legend.y = 1.12;
   const axis = { gridcolor: t.border, zerolinecolor: t.border, linecolor: t.border, tickfont: { color: t.muted, size: 10 },
                  title: { font: { color: t.muted } } };
   for (let i = 1; i <= 4; i++) { layout[`xaxis${i === 1 ? "" : i}`] = { ...axis }; layout[`yaxis${i === 1 ? "" : i}`] = { ...axis }; }
   Plotly.react("chart-splom", traces, layout, CONFIG);
 }
 
+/* ---------- Data table + export ---------- */
+const COLUMNS = [
+  { key: "id", label: "#" }, { key: "species", label: "Species" },
+  ...FEATURES.map(f => ({ key: f.key, label: `${f.label} (cm)` })),
+];
+function sortedVisible() {
+  const { key, dir } = state.sort;
+  return [...visibleRows()].sort((a, b) => (a[key] < b[key] ? -1 : a[key] > b[key] ? 1 : a.id - b.id) * dir);
+}
+function renderTable() {
+  const rows = sortedVisible();
+  const head = `<thead><tr>${COLUMNS.map(c => {
+    const sort = state.sort.key === c.key ? (state.sort.dir === 1 ? "ascending" : "descending") : "none";
+    return `<th aria-sort="${sort}"><button type="button" data-key="${c.key}">${c.label}</button></th>`;
+  }).join("")}</tr></thead>`;
+  const body = rows.map(r => `<tr><td>${r.id}</td><td><span class="dot" style="background:${speciesColor(r.species)}"></span> ${r.species}</td>` +
+    FEATURES.map(f => `<td>${r[f.key].toFixed(1)}</td>`).join("") + `</tr>`).join("");
+  document.getElementById("data-table").innerHTML = head + `<tbody>${body}</tbody>`;
+  document.getElementById("data-count").textContent = `Showing ${rows.length} of ${IRIS.length} flowers`;
+}
+document.getElementById("data-table").addEventListener("click", e => {
+  const btn = e.target.closest("th button");
+  if (!btn) return;
+  const key = btn.dataset.key;
+  state.sort = state.sort.key === key ? { key, dir: -state.sort.dir } : { key, dir: key === "id" || key === "species" ? 1 : -1 };
+  renderTable();
+});
+
+function toCSV(rows) {
+  const header = ["id", "species", ...FEATURES.map(f => f.key)];
+  return [header.join(","), ...rows.map(r => header.map(k => r[k]).join(","))].join("\n") + "\n";
+}
+document.getElementById("export-csv").addEventListener("click", () => {
+  const blob = new Blob([toCSV(sortedVisible())], { type: "text/csv" });
+  const a = Object.assign(document.createElement("a"), { href: URL.createObjectURL(blob), download: "iris-filtered.csv" });
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+});
+
+/* ---------- Wiring ---------- */
 const histSel = fillSelect("hist-feature", "petal_length");
 const boxSel = fillSelect("box-feature", "petal_length");
 const xSel = fillSelect("scatter-x", "petal_length");
 const ySel = fillSelect("scatter-y", "petal_width");
-const drawAll = () => {
+
+function update() {
+  const stats = computeStats(visibleRows());
+  window.IRIS_STATS = stats; // exposed for validation
+  renderFilters(); renderBanner(); renderSummary(stats);
   drawHist(histSel.value); drawBox(boxSel.value); drawScatter(xSel.value, ySel.value); drawSplom();
-};
+  renderTable();
+}
+
 histSel.addEventListener("change", () => drawHist(histSel.value));
 boxSel.addEventListener("change", () => drawBox(boxSel.value));
 xSel.addEventListener("change", () => drawScatter(xSel.value, ySel.value));
 ySel.addEventListener("change", () => drawScatter(xSel.value, ySel.value));
-matchMedia("(prefers-color-scheme: dark)").addEventListener("change", drawAll);
+
+const scatterEl = document.getElementById("chart-scatter");
+function onSelected(ev) {
+  if (redrawing) return;
+  const ids = (ev && ev.points || []).map(p => p.customdata && p.customdata[0]).filter(Boolean);
+  if (!ids.length) return; // empty drag: keep current state (clear via button / double-click)
+  state.selected = new Set(ids);
+  update();
+}
+let wired = false;
+function wireScatter() {
+  if (wired) return; wired = true;
+  scatterEl.on("plotly_selected", onSelected);
+  scatterEl.on("plotly_deselect", () => { if (!redrawing) clearSelection(); });
+  scatterEl.on("plotly_doubleclick", clearSelection);
+}
+
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change", update);
 let narrowNow = window.innerWidth < 720;
 window.addEventListener("resize", () => {
   const n = window.innerWidth < 720;
   if (n !== narrowNow) { narrowNow = n; drawSplom(); }
 });
-drawAll();
+const toolbar = document.getElementById("toolbar");
+new IntersectionObserver(([e]) => toolbar.classList.toggle("stuck", e.intersectionRatio < 1),
+  { threshold: [1], rootMargin: "-1px 0px 0px 0px" }).observe(toolbar);
+
+update();
+wireScatter();
+window.IRIS_APP = { state, update, visibleRows, toCSV, sortedVisible }; // exposed for validation
 </script>
 </body>
 </html>
