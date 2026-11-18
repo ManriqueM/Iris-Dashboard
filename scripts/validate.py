@@ -177,6 +177,102 @@ with sync_playwright() as p:
     check("Export respects filters (100 rows)", n2 == 100, str(n2))
     page.click('.chip[data-species="virginica"]'); page.wait_for_timeout(300)
 
+    # --- Phase 4: ML extras vs scikit-learn ---
+    import numpy as np
+    from sklearn.decomposition import PCA
+    from sklearn.neighbors import KNeighborsClassifier
+    from sklearn.preprocessing import StandardScaler
+
+    SP = ["setosa", "versicolor", "virginica"]
+    X = np.array([[r[k] for k in NUMERIC] for r in rows])
+    y = np.array([SP.index(r["species"]) for r in rows])
+    TOL = 1e-6
+
+    ok = True
+    for scope in ["all"] + SP:
+        subset = rows if scope == "all" else [r for r in rows if r["species"] == scope]
+        js = np.array(page.evaluate(f"IRIS_ML.corr({json.dumps(subset)})"))
+        ref = np.corrcoef((X if scope == "all" else X[y == SP.index(scope)]).T)
+        ok &= np.allclose(js, ref, atol=TOL)
+    check("Correlations match numpy (all + each species)", ok)
+
+    Zs = StandardScaler().fit_transform(X)
+    pca = PCA(2).fit(Zs)
+    js_ratio = page.evaluate("IRIS_ML.ratio.slice(0, 2)")
+    check("PCA variance ratio matches sklearn", np.allclose(js_ratio, pca.explained_variance_ratio_, atol=TOL),
+          f"{js_ratio[0]:.4f}, {js_ratio[1]:.4f}")
+    js_scores = np.array(page.evaluate("IRIS_ML.scores"))
+    ref_scores = pca.transform(Zs)
+    signs = np.sign((js_scores * ref_scores).sum(0))
+    check("PCA scores match sklearn (up to sign)", np.allclose(js_scores, ref_scores * signs, atol=TOL))
+    check("PCA: setosa on the left of PC1", js_scores[y == 0, 0].mean() < 0)
+
+    rng = np.random.default_rng(0)
+    lo, hi = X.min(0), X.max(0)
+    tests = np.round(rng.uniform(lo, hi, size=(20, 4)), 1).tolist() + \
+        [[5.0, 3.4, 1.5, 0.2], [5.9, 2.8, 4.3, 1.3], [6.6, 3.0, 5.6, 2.0], [6.0, 2.8, 4.9, 1.7]]
+    mism, ties = [], 0
+    for k in [1, 5, 15]:
+        clf = KNeighborsClassifier(k).fit(Zs, y)
+        ref = clf.predict(StandardScaler().fit(X).transform(np.array(tests)))
+        js = page.evaluate(f"{json.dumps(tests)}.map(p => IRIS_ML.knn(p, {k}))")
+        for p, r, j in zip(tests, ref, js):
+            ties += j["tie"]
+            if SP[r] != j["pred"] and not j["tie"]:
+                mism.append((k, p, SP[r], j["pred"]))
+    check("k-NN predictions match sklearn (24 points x k=1,5,15)", not mism, f"{len(mism)} mismatches, {ties} vote ties")
+
+    from sklearn.model_selection import LeaveOneOut, cross_val_score
+    loo_ok, detail = True, []
+    for k in [1, 3, 5, 7, 9, 15]:
+        ref = int(cross_val_score(KNeighborsClassifier(k), Zs, y, cv=LeaveOneOut()).sum())
+        js = page.evaluate(f"IRIS_ML.loo({k})")
+        loo_ok &= ref == js; detail.append(f"k={k}:{js}")
+    check("Leave-one-out accuracy matches sklearn for every k", loo_ok, " ".join(detail))
+
+    # UI: heatmap toggle
+    z_all = page.evaluate("document.getElementById('chart-corr').data[0].z[0][1]")
+    page.select_option("#corr-scope", "setosa"); page.wait_for_timeout(300)
+    z_set = page.evaluate("document.getElementById('chart-corr').data[0].z[0][1]")
+    check("Heatmap toggle: sepal L-W negative overall, positive in setosa", z_all < 0 < z_set, f"{z_all:.3f} → {z_set:.3f}")
+    page.select_option("#corr-scope", "all")
+
+    # UI: predictor
+    n_scatter = lambda: page.evaluate("document.getElementById('chart-scatter').data.length")
+    check("No overlay before predictor is used", n_scatter() == 3)
+    page.click('[data-preset="0"]'); page.wait_for_timeout(400)
+    pred = page.locator("#pred-species").inner_text().strip()
+    check("Preset 'Typical setosa' predicts setosa", pred == "setosa", pred)
+    star_scatter = page.evaluate("document.getElementById('chart-scatter').data.some(t => t.marker && t.marker.symbol === 'star')")
+    star_pca = page.evaluate("document.getElementById('chart-pca').data.some(t => t.marker && t.marker.symbol === 'star')")
+    seg = page.evaluate("document.getElementById('chart-pca').data.find(t => t.name === 'neighbours').x.filter(v => v === null).length")
+    check("Star + k neighbour lines on scatter and PCA", star_scatter and star_pca and seg == 5, f"lines={seg}")
+    page.fill("#pred-petal_length", "6"); page.dispatch_event("#pred-petal_length", "input")
+    page.fill("#pred-petal_width", "2.2"); page.dispatch_event("#pred-petal_width", "input")
+    page.wait_for_timeout(400)
+    pred2 = page.locator("#pred-species").inner_text().strip()
+    check("Moving sliders to large petals predicts virginica", pred2 == "virginica", pred2)
+    page.select_option("#pred-k", "15"); page.wait_for_timeout(300)
+    check("k=15 shows LOO 145/150", "145/150" in page.locator("#pred-result").inner_text())
+    page.click('[data-preset="3"]'); page.wait_for_timeout(300)
+    page.screenshot(path=str(shots / "phase4-desktop-predictor.png"), full_page=True)
+    page.uncheck("#pred-show"); page.wait_for_timeout(300)
+    check("'Show on charts' off removes overlay", n_scatter() == 3)
+    page.check("#pred-show"); page.wait_for_timeout(300)
+
+    # UI: PCA follows filters and selection
+    page.click('.chip[data-species="setosa"]'); page.wait_for_timeout(300)
+    names = page.evaluate("document.getElementById('chart-pca').data.map(t => t.name)")
+    check("PCA follows species filter", "setosa" not in names and "versicolor" in names, str(names))
+    page.click('.chip[data-species="setosa"]'); page.wait_for_timeout(300)
+    page.evaluate("""() => { const gd = document.getElementById('chart-scatter');
+        const pts = gd.data[0].customdata.slice(0, 7).map((cd, i) => ({ curveNumber: 0, pointIndex: i, customdata: cd }));
+        gd.emit('plotly_selected', { points: pts }); }""")
+    page.wait_for_timeout(400)
+    psel = page.evaluate("document.getElementById('chart-pca').data.slice(0, 3).map(t => (t.selectedpoints || []).length)")
+    check("PCA follows linked selection", psel == [7, 0, 0], str(psel))
+    page.click("#clear-sel"); page.wait_for_timeout(300)
+
     check("No console errors overall", not errors, "; ".join(errors))
     check("No network requests overall", not external, ", ".join(external))
     page.screenshot(path=str(shots / "phase3-desktop.png"), full_page=True)

@@ -89,6 +89,26 @@
   #data-table td:nth-child(2) { text-align: left; }
   #data-table th:nth-child(2) { text-align: left; }
 
+  /* Predictor */
+  .predictor { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); gap: 24px; margin-top: 10px; }
+  @media (max-width: 720px) { .predictor { grid-template-columns: 1fr; } }
+  .presets { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 12px; }
+  .presets .btn { font-size: 0.8rem; padding: 4px 10px; }
+  .slider { display: grid; grid-template-columns: 110px minmax(0, 1fr) 56px; align-items: center; gap: 10px; margin: 8px 0; font-size: 0.9rem; }
+  .slider input { width: 100%; accent-color: var(--text); }
+  .slider output { text-align: right; font-variant-numeric: tabular-nums; }
+  .k-row, .inline-check { font-size: 0.85rem; color: var(--muted); display: inline-flex; align-items: center; gap: 8px; margin-top: 8px; }
+  .result { border-left: 1px solid var(--border); padding-left: 24px; }
+  @media (max-width: 720px) { .result { border-left: none; padding-left: 0; border-top: 1px solid var(--border); padding-top: 16px; } }
+  .result .label { font-size: 0.85rem; color: var(--muted); }
+  .result .species { font-size: 1.8rem; font-weight: 600; display: flex; align-items: center; gap: 10px; margin: 2px 0 12px; }
+  .result .species .dot { width: 14px; height: 14px; }
+  .votebar { display: flex; height: 12px; border-radius: 6px; overflow: hidden; background: var(--border); }
+  .votebar span { display: block; height: 100%; }
+  .votes { display: flex; gap: 14px; flex-wrap: wrap; font-size: 0.85rem; color: var(--muted); margin: 8px 0 14px; }
+  .result .small { font-size: 0.85rem; color: var(--muted); margin: 6px 0; }
+  .result .small b { color: var(--text); font-weight: 600; }
+
   footer { margin-top: 32px; font-size: 0.8rem; color: var(--muted); }
 </style>
 </head>
@@ -144,6 +164,42 @@
     </div>
   </section>
 
+  <h2>Patterns &amp; prediction</h2>
+  <section class="grid" id="ml-grid">
+    <div class="card chart-card">
+      <div class="chart-head"><h3>Correlations</h3>
+        <label>Within <select id="corr-scope">
+          <option value="all">All flowers</option>
+          <option value="setosa">setosa only</option>
+          <option value="versicolor">versicolor only</option>
+          <option value="virginica">virginica only</option>
+        </select></label></div>
+      <p class="hint">+1 = rise together, −1 = one rises as the other falls. Try "setosa only": sepal length vs. width flips from slightly negative to strongly positive.</p>
+      <div class="chart" id="chart-corr"></div>
+    </div>
+    <div class="card chart-card">
+      <div class="chart-head"><h3>PCA: all four features in 2-D</h3></div>
+      <p class="hint" id="pca-hint">Principal components squeeze the four measurements into two axes that keep the most variation.</p>
+      <div class="chart" id="chart-pca"></div>
+    </div>
+    <div class="card chart-card wide" id="predictor-card">
+      <div class="chart-head"><h3>Predict a flower (k-nearest neighbours)</h3>
+        <label class="inline-check"><input type="checkbox" id="pred-show" checked> Show on charts</label></div>
+      <p class="hint">Set four measurements. The model finds the <em>k</em> most similar flowers in the dataset and lets them vote. Your flower appears as a ★ on the scatter and PCA charts.</p>
+      <div class="predictor">
+        <div class="controls">
+          <div class="presets" id="pred-presets"></div>
+          <div id="pred-sliders"></div>
+          <label class="k-row">Neighbours (k)
+            <select id="pred-k">
+              <option>1</option><option>3</option><option selected>5</option><option>7</option><option>9</option><option>15</option>
+            </select></label>
+        </div>
+        <div class="result" id="pred-result" aria-live="polite"></div>
+      </div>
+    </div>
+  </section>
+
   <h2>Data</h2>
   <section class="card">
     <div class="data-head">
@@ -178,7 +234,9 @@ const state = {
   species: new Set(SPECIES),   // active species filters
   selected: null,              // Set of row ids from the scatter brush, or null
   sort: { key: "id", dir: 1 }, // data table sort
+  prediction: { point: FEATURES.map(f => +mean(IRIS, f.key).toFixed(1)), k: 5, touched: false, show: true },
 };
+const predictionOn = () => state.prediction.touched && state.prediction.show;
 const filteredRows = () => IRIS.filter(r => state.species.has(r.species));
 const visibleRows = () => filteredRows().filter(r => !state.selected || state.selected.has(r.id));
 const activeSpecies = () => SPECIES.filter(s => state.species.has(s));
@@ -192,6 +250,100 @@ function computeStats(rows) {
   return { n: rows.length, nSpecies: new Set(rows.map(r => r.species)).size, overall, bySpecies };
 }
 const fmt = v => Number.isNaN(v) ? "—" : v.toFixed(2);
+
+/* ---------- ML maths (plain JS, fitted on all 150 flowers) ---------- */
+const ML = (() => {
+  const K = FEATURES.map(f => f.key);
+  const vec = r => K.map(k => r[k]);
+  const X = IRIS.map(vec);
+  const n = X.length, d = K.length;
+  const means = K.map((_, j) => X.reduce((a, x) => a + x[j], 0) / n);
+  const stds = K.map((_, j) => Math.sqrt(X.reduce((a, x) => a + (x[j] - means[j]) ** 2, 0) / n)); // population std
+  const zOf = x => x.map((v, j) => (v - means[j]) / stds[j]);
+  const Z = X.map(zOf);
+
+  function corr(rows) {
+    const M = rows.map(vec), m = M.length;
+    const mu = K.map((_, j) => M.reduce((a, x) => a + x[j], 0) / m);
+    const C = K.map(() => K.map(() => 0));
+    for (let i = 0; i < d; i++) for (let j = 0; j < d; j++) {
+      let sxy = 0, sxx = 0, syy = 0;
+      for (const x of M) { const a = x[i] - mu[i], b = x[j] - mu[j]; sxy += a * b; sxx += a * a; syy += b * b; }
+      C[i][j] = sxy / Math.sqrt(sxx * syy);
+    }
+    return C;
+  }
+
+  // Jacobi eigen-decomposition of a symmetric matrix → { values, vectors (columns) }, sorted descending
+  function jacobiEigen(S) {
+    const m = S.length, a = S.map(r => r.slice()), V = S.map((_, i) => S.map((_, j) => +(i === j)));
+    for (let sweep = 0; sweep < 100; sweep++) {
+      let off = 0;
+      for (let p = 0; p < m; p++) for (let q = p + 1; q < m; q++) off += a[p][q] ** 2;
+      if (off < 1e-22) break;
+      for (let p = 0; p < m; p++) for (let q = p + 1; q < m; q++) {
+        if (Math.abs(a[p][q]) < 1e-300) continue;
+        const theta = (a[q][q] - a[p][p]) / (2 * a[p][q]);
+        const t = Math.sign(theta || 1) / (Math.abs(theta) + Math.sqrt(theta * theta + 1));
+        const c = 1 / Math.sqrt(t * t + 1), s = t * c;
+        for (let k = 0; k < m; k++) { const kp = a[k][p], kq = a[k][q]; a[k][p] = c * kp - s * kq; a[k][q] = s * kp + c * kq; }
+        for (let k = 0; k < m; k++) { const pk = a[p][k], qk = a[q][k]; a[p][k] = c * pk - s * qk; a[q][k] = s * pk + c * qk; }
+        for (let k = 0; k < m; k++) { const kp = V[k][p], kq = V[k][q]; V[k][p] = c * kp - s * kq; V[k][q] = s * kp + c * kq; }
+      }
+    }
+    const order = a.map((_, i) => i).sort((i, j) => a[j][j] - a[i][i]);
+    return { values: order.map(i => a[i][i]), vectors: order.map(i => V.map(r => r[i])) };
+  }
+
+  // PCA on standardized data
+  const cov = K.map((_, i) => K.map((_, j) => Z.reduce((acc, z) => acc + z[i] * z[j], 0) / n));
+  const eig = jacobiEigen(cov);
+  const total = eig.values.reduce((a, b) => a + b, 0);
+  const ratio = eig.values.map(v => v / total);
+  const comps = eig.vectors.slice(0, 2).map(v => v.slice());
+  const dot = (a, b) => a.reduce((s, v, i) => s + v * b[i], 0);
+  // Sign convention: setosa on the left of PC1; PC2's largest |loading| positive
+  const setosaPc1 = IRIS.reduce((s, r, i) => s + (r.species === "setosa" ? dot(Z[i], comps[0]) : 0), 0);
+  if (setosaPc1 > 0) comps[0] = comps[0].map(v => -v);
+  const big = comps[1].reduce((b, v) => Math.abs(v) > Math.abs(b) ? v : b, 0);
+  if (big < 0) comps[1] = comps[1].map(v => -v);
+  const projectZ = z => comps.map(c => dot(z, c));
+  const scores = Z.map(projectZ);
+  const project = raw => projectZ(zOf(raw));
+
+  // k-NN: Euclidean on standardized features; neighbour ties by dataset order; vote ties → nearest tied class
+  function knn(raw, k, excludeIdx = -1) {
+    const q = zOf(raw);
+    const cand = [];
+    for (let i = 0; i < n; i++) {
+      if (i === excludeIdx) continue;
+      let s = 0; for (let j = 0; j < d; j++) s += (Z[i][j] - q[j]) ** 2;
+      cand.push([Math.sqrt(s), i]);
+    }
+    cand.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+    const nb = cand.slice(0, k).map(c => c[1]);
+    const votes = SPECIES.map(s => nb.filter(i => IRIS[i].species === s).length);
+    const top = Math.max(...votes);
+    const tied = SPECIES.filter((_, c) => votes[c] === top);
+    const pred = tied.length === 1 ? tied[0] : IRIS[nb.find(i => tied.includes(IRIS[i].species))].species;
+    return { pred, votes, neighbours: nb.map(i => IRIS[i].id), tie: tied.length > 1 };
+  }
+  const looCache = {};
+  function loo(k) {
+    if (!(k in looCache)) looCache[k] = X.reduce((acc, x, i) => acc + (knn(x, k, i).pred === IRIS[i].species), 0);
+    return looCache[k];
+  }
+  const range = K.map((_, j) => [Math.min(...X.map(x => x[j])), Math.max(...X.map(x => x[j]))]);
+  return { corr, jacobiEigen, ratio, comps, scores, project, knn, loo, means, stds, range };
+})();
+window.IRIS_ML = ML; // exposed for validation
+
+const PRESETS = [
+  { label: "Typical setosa",     point: [5.0, 3.4, 1.5, 0.2] },
+  { label: "Typical versicolor", point: [5.9, 2.8, 4.3, 1.3] },
+  { label: "Typical virginica",  point: [6.6, 3.0, 5.6, 2.0] },
+  { label: "Borderline",         point: [6.0, 2.8, 4.9, 1.7] },
+];
 
 /* ---------- Filters + banner ---------- */
 function renderFilters() {
@@ -346,6 +498,13 @@ function drawScatter(xKey, yKey) {
         FEATURES.map((f, i) => `${f.label}: %{customdata[${i + 1}]} cm`).join("<br>") + "<extra></extra>",
     };
   });
+  if (predictionOn()) {
+    const xi = FEATURES.findIndex(f => f.key === xKey), yi = FEATURES.findIndex(f => f.key === yKey);
+    const p = state.prediction.point;
+    traces.push(...overlayTraces(t, [p[xi], p[yi]], currentPrediction().neighbours.map(id => {
+      const r = IRIS[id - 1]; return [r[xKey], r[yKey]];
+    })));
+  }
   const layout = baseLayout(t, { legend: { orientation: "h", y: 1.08, x: 0 }, dragmode: "select", hovermode: "closest" });
   layout.margin.t = 28;
   layout.xaxis.title = axisTitle(t, `${labelOf(xKey)} (cm)`);
@@ -379,6 +538,133 @@ function drawSplom() {
                  title: { font: { color: t.muted } } };
   for (let i = 1; i <= 4; i++) { layout[`xaxis${i === 1 ? "" : i}`] = { ...axis }; layout[`yaxis${i === 1 ? "" : i}`] = { ...axis }; }
   Plotly.react("chart-splom", traces, layout, CONFIG);
+}
+
+/* ---------- ML views (Phase 4) ---------- */
+let predCache = null;
+function currentPrediction() {
+  const { point, k } = state.prediction;
+  const key = point.join(",") + "|" + k;
+  if (!predCache || predCache.key !== key) predCache = { key, ...ML.knn(point, k) };
+  return predCache;
+}
+
+// Star for the new flower + lines to its neighbours (not selectable: no customdata)
+function overlayTraces(t, star, nbs) {
+  const lx = [], ly = [];
+  nbs.forEach(([x, y]) => { lx.push(star[0], x, null); ly.push(star[1], y, null); });
+  const pred = currentPrediction().pred;
+  return [
+    { type: "scatter", mode: "lines", x: lx, y: ly, name: "neighbours", showlegend: false, hoverinfo: "skip",
+      line: { color: t.text, width: 1, dash: "dot" }, opacity: 0.6 },
+    { type: "scatter", mode: "markers", x: [star[0]], y: [star[1]], name: "your flower",
+      marker: { symbol: "star", size: 20, color: t.colors[pred], line: { color: t.text, width: 1.5 } },
+      hovertemplate: `<b>Your flower</b><br>predicted: ${pred}<extra></extra>` },
+  ];
+}
+
+function drawCorr() {
+  const t = theme();
+  const scope = document.getElementById("corr-scope").value;
+  const rows = scope === "all" ? IRIS : IRIS.filter(r => r.species === scope);
+  const C = ML.corr(rows);
+  const labels = FEATURES.map(f => f.label);
+  const dark = matchMedia("(prefers-color-scheme: dark)").matches;
+  const trace = {
+    type: "heatmap", z: C, x: labels, y: labels, zmin: -1, zmax: 1,
+    colorscale: [[0, "#c0392b"], [0.5, dark ? "#2a2a2e" : "#f4f4f2"], [1, "#2a6fd6"]],
+    texttemplate: "%{z:.2f}", textfont: { size: 13 },
+    hovertemplate: "%{y} vs %{x}<br>r = %{z:.3f}<extra></extra>",
+    colorbar: { thickness: 10, len: 0.9, tickfont: { color: t.muted }, outlinewidth: 0 },
+    xgap: 2, ygap: 2,
+  };
+  const layout = baseLayout(t, { margin: { l: 96, r: 8, t: 8, b: 70 } });
+  layout.yaxis = { ...layout.yaxis, autorange: "reversed", showgrid: false };
+  layout.xaxis = { ...layout.xaxis, showgrid: false, tickangle: -20 };
+  Plotly.react("chart-corr", [trace], layout, CONFIG);
+}
+
+function drawPCA() {
+  const t = theme();
+  const traces = activeSpecies().map(s => {
+    const idx = IRIS.map((r, i) => r.species === s ? i : -1).filter(i => i >= 0);
+    const rows = idx.map(i => IRIS[i]);
+    return {
+      type: "scatter", mode: "markers", name: s,
+      x: idx.map(i => ML.scores[i][0]), y: idx.map(i => ML.scores[i][1]),
+      customdata: rows.map(r => r.id),
+      marker: { color: t.colors[s], size: 7, opacity: 0.85, line: { color: t.surface, width: 0.5 } },
+      selectedpoints: selIdx(rows), unselected: FADED,
+      hovertemplate: `<b>${s}</b> · flower #%{customdata}<br>PC1 %{x:.2f}, PC2 %{y:.2f}<extra></extra>`,
+    };
+  });
+  if (predictionOn()) {
+    const star = ML.project(state.prediction.point);
+    traces.push(...overlayTraces(t, star, currentPrediction().neighbours.map(id => ML.scores[id - 1])));
+  }
+  const layout = baseLayout(t, { legend: { orientation: "h", y: 1.1, x: 0 }, hovermode: "closest", dragmode: "zoom" });
+  layout.margin.t = 28;
+  layout.xaxis.title = axisTitle(t, `PC1 (${(ML.ratio[0] * 100).toFixed(1)}% of variance)`);
+  layout.yaxis.title = axisTitle(t, `PC2 (${(ML.ratio[1] * 100).toFixed(1)}%)`);
+  Plotly.react("chart-pca", traces, layout, CONFIG);
+}
+
+function buildPredictor() {
+  document.getElementById("pred-presets").innerHTML = PRESETS.map((p, i) =>
+    `<button type="button" class="btn" data-preset="${i}">${p.label}</button>`).join("");
+  document.getElementById("pred-sliders").innerHTML = FEATURES.map((f, j) => {
+    const [lo, hi] = ML.range[j];
+    return `<label class="slider"><span>${f.label}</span>
+      <input type="range" id="pred-${f.key}" data-j="${j}" min="${lo}" max="${hi}" step="0.1" value="${state.prediction.point[j]}">
+      <output id="pred-${f.key}-out">${state.prediction.point[j].toFixed(1)} cm</output></label>`;
+  }).join("");
+}
+function syncSliders() {
+  FEATURES.forEach((f, j) => {
+    document.getElementById(`pred-${f.key}`).value = state.prediction.point[j];
+    document.getElementById(`pred-${f.key}-out`).textContent = `${state.prediction.point[j].toFixed(1)} cm`;
+  });
+}
+function renderPrediction() {
+  const { k } = state.prediction;
+  const r = currentPrediction();
+  const correct = ML.loo(k);
+  document.getElementById("pred-result").innerHTML = `
+    <div class="label">Predicted species</div>
+    <div class="species" id="pred-species"><span class="dot" style="background:${speciesColor(r.pred)}"></span>${r.pred}</div>
+    <div class="label">Votes from the ${k} nearest flower${k === 1 ? "" : "s"}</div>
+    <div class="votebar" role="img" aria-label="${SPECIES.map((s, c) => `${s} ${r.votes[c]}`).join(", ")}">
+      ${SPECIES.map((s, c) => r.votes[c] ? `<span style="width:${r.votes[c] / k * 100}%;background:${speciesColor(s)}"></span>` : "").join("")}</div>
+    <div class="votes">${SPECIES.map((s, c) => `<span><span class="dot" style="background:${speciesColor(s)}"></span> ${s}: ${r.votes[c]}</span>`).join("")}</div>
+    ${r.tie ? `<p class="small">Tied vote, so the closest neighbour's species wins.</p>` : ""}
+    <p class="small">Nearest flowers: ${r.neighbours.map(id => `#${id}`).join(", ")}</p>
+    <p class="small">Leave-one-out accuracy with k = ${k}: <b>${correct}/150 (${(correct / 1.5).toFixed(1)}%)</b>.
+      Each flower is hidden in turn and predicted from the other 149.</p>`;
+}
+function onPredictionChange() {
+  renderPrediction();
+  drawScatter(xSel.value, ySel.value);
+  drawPCA();
+}
+function wirePredictor() {
+  document.getElementById("pred-sliders").addEventListener("input", e => {
+    const j = +e.target.dataset.j;
+    if (Number.isNaN(j)) return;
+    state.prediction.point[j] = +(+e.target.value).toFixed(1);
+    state.prediction.touched = true;
+    document.getElementById(`pred-${FEATURES[j].key}-out`).textContent = `${state.prediction.point[j].toFixed(1)} cm`;
+    onPredictionChange();
+  });
+  document.getElementById("pred-presets").addEventListener("click", e => {
+    const b = e.target.closest("[data-preset]");
+    if (!b) return;
+    state.prediction.point = PRESETS[+b.dataset.preset].point.slice();
+    state.prediction.touched = true;
+    syncSliders(); onPredictionChange();
+  });
+  document.getElementById("pred-k").addEventListener("change", e => { state.prediction.k = +e.target.value; onPredictionChange(); });
+  document.getElementById("pred-show").addEventListener("change", e => { state.prediction.show = e.target.checked; onPredictionChange(); });
+  document.getElementById("corr-scope").addEventListener("change", drawCorr);
 }
 
 /* ---------- Data table + export ---------- */
@@ -431,8 +717,11 @@ function update() {
   window.IRIS_STATS = stats; // exposed for validation
   renderFilters(); renderBanner(); renderSummary(stats);
   drawHist(histSel.value); drawBox(boxSel.value); drawScatter(xSel.value, ySel.value); drawSplom();
+  drawCorr(); drawPCA(); renderPrediction();
   renderTable();
 }
+buildPredictor();
+wirePredictor();
 
 histSel.addEventListener("change", () => drawHist(histSel.value));
 boxSel.addEventListener("change", () => drawBox(boxSel.value));
