@@ -22,7 +22,7 @@
 - [x] PCA 2-D projection
 - [x] k-NN "predict a flower" tool with sliders
 
-## Phase 5 — Polish
-- [ ] Responsive layout and light/dark check
-- [ ] Short "how to read this" notes for learners
-- [ ] README
+## Phase 5 — Polish ✅
+- [x] Responsive layout and light/dark check
+- [x] Short "how to read this" notes for learners
+- [x] README
