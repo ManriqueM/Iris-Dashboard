@@ -1,5 +1,8 @@
-"""Phase 1 validation: data integrity, embedded data, KPI values, offline render + screenshot."""
+"""Validate the Iris dashboard: data, KPIs, charts, interactivity, ML vs scikit-learn, theme and layout.
+
+Runs the full browser suite with the system in light mode, then again in dark mode (`--dark`)."""
 import json
+import os
 import re
 import sys
 from collections import Counter
@@ -11,6 +14,8 @@ from build import ROOT, NUMERIC, load_rows  # noqa: E402
 REF_OVERALL = {"sepal_length": 5.843, "sepal_width": 3.057, "petal_length": 3.758, "petal_width": 1.199}
 REF_PETAL_LENGTH = {"setosa": 1.462, "virginica": 5.552}
 results = []
+SCHEME = "dark" if "--dark" in sys.argv else "light"
+print(f"=== Browser color scheme: {SCHEME} ===")
 
 
 def check(name, ok, detail=""):
@@ -43,8 +48,10 @@ from playwright.sync_api import sync_playwright  # noqa: E402
 shots = ROOT / "screenshots"
 shots.mkdir(exist_ok=True)
 with sync_playwright() as p:
-    browser = p.chromium.launch(executable_path="/usr/bin/google-chrome")
-    page = browser.new_page(viewport={"width": 1280, "height": 900})
+    # Uses Playwright's bundled Chromium (`playwright install chromium`); set CHROME_PATH to use another browser
+    chrome = os.environ.get("CHROME_PATH")
+    browser = p.chromium.launch(executable_path=chrome) if chrome else p.chromium.launch()
+    page = browser.new_page(viewport={"width": 1280, "height": 900}, color_scheme=SCHEME)
     errors, external = [], []
     page.on("console", lambda msg: msg.type == "error" and errors.append(msg.text))
     page.on("pageerror", lambda e: errors.append(str(e)))
@@ -136,7 +143,7 @@ with sync_playwright() as p:
     hist_n = page.evaluate("document.getElementById('chart-hist').data.reduce((a, t) => a + t.x.length, 0)")
     check("Selection: histograms use only selected flowers", hist_n == 10, str(hist_n))
     check("No console errors during selection", not errors, "; ".join(errors))
-    page.screenshot(path=str(shots / "phase3-selection-desktop.png"), full_page=True)
+    page.screenshot(path=str(shots / f"{SCHEME}-phase3-selection-desktop.png"), full_page=True)
 
     page.click("#clear-sel")
     page.wait_for_timeout(300)
@@ -146,7 +153,7 @@ with sync_playwright() as p:
     page.locator("#chart-scatter").scroll_into_view_if_needed()
     box = page.evaluate("""() => {
         const gd = document.getElementById('chart-scatter'), fl = gd._fullLayout, r = gd.getBoundingClientRect();
-        const px = v => r.left + fl.margin.l + fl.xaxis.l2p(v), py = v => r.top + fl.margin.t + fl.yaxis.l2p(v);
+        const px = v => r.left + fl._size.l + fl.xaxis.l2p(v), py = v => r.top + fl._size.t + fl.yaxis.l2p(v);
         return [px(0.9), py(0.75), px(2.1), py(0.0)];
     }""")
     page.mouse.move(box[0], box[1]); page.mouse.down()
@@ -255,7 +262,7 @@ with sync_playwright() as p:
     page.select_option("#pred-k", "15"); page.wait_for_timeout(300)
     check("k=15 shows LOO 145/150", "145/150" in page.locator("#pred-result").inner_text())
     page.click('[data-preset="3"]'); page.wait_for_timeout(300)
-    page.screenshot(path=str(shots / "phase4-desktop-predictor.png"), full_page=True)
+    page.screenshot(path=str(shots / f"{SCHEME}-phase4-desktop-predictor.png"), full_page=True)
     page.uncheck("#pred-show"); page.wait_for_timeout(300)
     check("'Show on charts' off removes overlay", n_scatter() == 3)
     page.check("#pred-show"); page.wait_for_timeout(300)
@@ -273,20 +280,72 @@ with sync_playwright() as p:
     check("PCA follows linked selection", psel == [7, 0, 0], str(psel))
     page.click("#clear-sel"); page.wait_for_timeout(300)
 
+    # --- Phase 5: polish ---
+    check("'How to read' guide closed by default", page.evaluate("!document.getElementById('guide').open"))
+    page.click("#guide summary"); page.wait_for_timeout(150)
+    check("'How to read' guide opens on click", page.evaluate("document.getElementById('guide').open")
+          and page.locator("#guide li").count() == 5)
+    page.click("#guide summary")
+    cards = page.locator(".chart-card").count()
+    noted = page.locator(".chart-card .notice").count()
+    check("Every chart card has a 'What to notice' note", cards == 7 and noted == 7, f"{noted}/{cards}")
+
+    def luminance(hexc):
+        rgb = [int(hexc.lstrip("#")[i:i + 2], 16) / 255 for i in (0, 2, 4)]
+        lin = [c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4 for c in rgb]
+        return 0.2126 * lin[0] + 0.7152 * lin[1] + 0.0722 * lin[2]
+
+    def contrast(a, b):
+        la, lb = sorted([luminance(a), luminance(b)], reverse=True)
+        return (la + 0.05) / (lb + 0.05)
+
+    worst = []
+    for theme_name in ["light", "dark"]:
+        page.evaluate(f"document.documentElement.dataset.theme = '{theme_name}'")
+        v = page.evaluate("""() => Object.fromEntries(['--text','--muted','--bg','--surface','--accent-bg']
+            .map(n => [n, getComputedStyle(document.documentElement).getPropertyValue(n).trim()]))""")
+        for fg in ["--text", "--muted"]:
+            for bg in ["--bg", "--surface", "--accent-bg"]:
+                worst.append((round(contrast(v[fg], v[bg]), 2), theme_name, fg, bg))
+    page.evaluate("delete document.documentElement.dataset.theme")
+    low = min(worst)
+    check("Text contrast >= 4.5:1 in both themes", low[0] >= 4.5, f"lowest {low[0]} ({low[1]} {low[2]} on {low[3]})")
+
+    # Theme toggle: Auto → Light → Dark → Auto, charts re-theme, choice persists across reload
+    font_color = lambda: page.evaluate("document.getElementById('chart-scatter')._fullLayout.font.color")
+    text_var = lambda: page.evaluate("getComputedStyle(document.documentElement).getPropertyValue('--text').trim()")
+    btn = lambda: page.locator("#theme-btn").inner_text()
+    check("Theme starts on Auto", "Auto" in btn() and page.get_attribute("html", "data-theme") is None, btn())
+    page.click("#theme-btn"); page.wait_for_timeout(300)
+    light_ok = page.get_attribute("html", "data-theme") == "light" and font_color() == text_var() == "#1d1d1f"
+    page.click("#theme-btn"); page.wait_for_timeout(300)
+    dark_ok = page.get_attribute("html", "data-theme") == "dark" and font_color() == text_var() == "#ececee"
+    check("Toggle cycles to Light then Dark and charts re-theme", light_ok and dark_ok, f"chart font {font_color()}")
+    page.reload(); page.wait_for_timeout(800)
+    check("Theme choice persists across reload", page.get_attribute("html", "data-theme") == "dark" and "Dark" in btn())
+    page.click("#theme-btn"); page.wait_for_timeout(300)
+    check("Toggle returns to Auto (follows system)", page.get_attribute("html", "data-theme") is None
+          and text_var() == ("#ececee" if SCHEME == "dark" else "#1d1d1f"))
+
     check("No console errors overall", not errors, "; ".join(errors))
     check("No network requests overall", not external, ", ".join(external))
-    page.screenshot(path=str(shots / "phase3-desktop.png"), full_page=True)
 
-    page.set_viewport_size({"width": 375, "height": 800})
-    page.wait_for_timeout(600)
-    page.click('.chip[data-species="setosa"]'); page.wait_for_timeout(300)
-    overflow = page.evaluate("document.documentElement.scrollWidth > window.innerWidth")
-    check("No horizontal overflow at 375px", not overflow)
-    page.evaluate("window.scrollTo(0, 0)"); page.wait_for_timeout(300)
+    # Responsive: no overflow and screenshots at 1280 / 768 / 375
+    for w in [1280, 768, 375]:
+        page.set_viewport_size({"width": w, "height": 900 if w > 375 else 800})
+        page.wait_for_timeout(700)
+        page.evaluate("window.scrollTo(0, 0)"); page.wait_for_timeout(200)
+        overflow = page.evaluate("document.documentElement.scrollWidth > window.innerWidth")
+        check(f"No horizontal overflow at {w}px", not overflow)
+        page.screenshot(path=str(shots / f"{SCHEME}-{w}.png"), full_page=True)
     check("Filter chips visible at 375px", page.is_visible('.chip[data-species="virginica"]'))
-    page.screenshot(path=str(shots / "phase3-mobile.png"), full_page=True)
-    page.screenshot(path=str(shots / "phase3-mobile-top.png"))
     browser.close()
 
-print(f"\n{sum(results)}/{len(results)} checks passed")
-sys.exit(0 if all(results) else 1)
+print(f"\n[{SCHEME}] {sum(results)}/{len(results)} checks passed")
+ok = all(results)
+if SCHEME == "light":  # run the whole suite again with the system in dark mode
+    import subprocess
+    print()
+    ok = subprocess.call([sys.executable, __file__, "--dark"]) == 0 and ok
+    print(f"\nOVERALL: {'PASS' if ok else 'FAIL'} (light + dark)")
+sys.exit(0 if ok else 1)
